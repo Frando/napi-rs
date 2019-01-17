@@ -6,12 +6,5 @@
 
 include!("bindings.rs");
 
-#[cfg(node8)]
-mod node8;
-#[cfg(node8)]
-pub use self::node8::Status;
-
-#[cfg(nodestable)]
 mod stable;
-#[cfg(nodestable)]
 pub use self::stable::Status;

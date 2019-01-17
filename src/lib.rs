@@ -78,6 +78,17 @@ struct TaggedObject<T> {
   object: Option<T>,
 }
 
+pub struct ModuleInitContext<'env> {
+  pub env: &'env Env,
+  pub exports: &'env mut Value<'env, Object>
+}
+
+impl <'env>ModuleInitContext<'env> {
+  pub fn export(&mut self, name: &str, cb: Callback) {
+    self.exports.set_named_property(name, self.env.create_function(name, cb));
+  }
+}
+
 #[macro_export]
 macro_rules! register_module {
   ($module_name:ident, $init:ident) => {
@@ -114,7 +125,9 @@ macro_rules! register_module {
           let env = Env::from_raw(raw_env);
           let mut exports: Value<Object> = Value::from_raw(&env, raw_exports);
 
-          let result = $init(&env, &mut exports);
+          let ctx = ModuleInitContext { env: &env, exports: &mut exports };
+
+          let result = $init(ctx);
 
           match result {
             Ok(Some(exports)) => exports.into_raw(),
@@ -131,6 +144,14 @@ macro_rules! register_module {
     };
   };
 }
+
+pub struct CallContext<'env> {
+  pub env: &'env Env,
+  pub this: Value<'env, Any>,
+  pub args: &'env [Value<'env, Any>]
+}
+
+pub type AnyResult = Result<Option<Value<'static, Any>>>;
 
 #[macro_export]
 macro_rules! callback {
@@ -171,7 +192,8 @@ macro_rules! callback {
       }
 
       let callback = $callback_expr;
-      let result = callback(&env, this, &args[0..argc]);
+      let ctx = CallContext { env: &env, this, args: &args[0..argc] };
+      let result = callback(ctx);
 
       match result {
         Ok(Some(result)) => result.into_raw(),
@@ -210,6 +232,10 @@ impl Env {
     Env(env)
   }
 
+  pub unsafe fn borrow_forever(&self) -> &'static Env {
+    std::mem::transmute(self)
+  }
+
   pub fn get_undefined<'a>(&'a self) -> Value<'a, Undefined> {
     let mut raw_value = ptr::null_mut();
     let status = unsafe { sys::napi_get_undefined(self.0, &mut raw_value) };
@@ -228,6 +254,14 @@ impl Env {
     let mut raw_value = ptr::null_mut();
     let status =
       unsafe { sys::napi_create_int64(self.0, int, (&mut raw_value) as *mut sys::napi_value) };
+    debug_assert!(Status::from(status) == Status::Ok);
+    Value::from_raw(self, raw_value)
+  }
+
+  pub fn create_double<'a>(&'a self, num: f64) -> Value<'a, Number> {
+    let mut raw_value = ptr::null_mut();
+    let status =
+      unsafe { sys::napi_create_double(self.0, num, (&mut raw_value) as *mut sys::napi_value) };
     debug_assert!(Status::from(status) == Status::Ok);
     Value::from_raw(self, raw_value)
   }
@@ -500,9 +534,8 @@ impl<'env, T: ValueType> Value<'env, T> {
 
   pub fn try_into<S: ValueType>(self) -> Result<Value<'env, S>> {
     unsafe {
-      let mut value_type: sys::napi_valuetype = mem::uninitialized();
-      let status = sys::napi_typeof(self.env.0, self.raw_value, &mut value_type);
-      debug_assert!(Status::from(status) == Status::Ok);
+      let value_type = self.get_value_type();
+
       if S::matches_raw_type(value_type) {
         Ok(mem::transmute(self))
       } else {
@@ -511,6 +544,14 @@ impl<'env, T: ValueType> Value<'env, T> {
         })
       }
     }
+  }
+
+  pub unsafe fn get_value_type(self) -> sys::napi_valuetype {
+    let mut value_type: sys::napi_valuetype = mem::uninitialized();
+    let status = sys::napi_typeof(self.env.0, self.raw_value, &mut value_type);
+    debug_assert!(Status::from(status) == Status::Ok);
+
+    value_type
   }
 
   pub fn coerce_to_number(self) -> Result<Value<'env, Number>> {
