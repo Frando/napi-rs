@@ -217,6 +217,9 @@ impl Error {
   pub fn new(status: Status) -> Self {
     Error { status: status }
   }
+  pub fn get_status(self) -> Status {
+    self.status
+  }
 }
 
 impl From<std::ffi::NulError> for Error {
